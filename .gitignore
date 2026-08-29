@@ -1,0 +1,32 @@
+# Secrets
+.env
+.env.*
+!.env.example
+config/gcp-service-account.json
+*.key
+*.pem
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local data / caches
+data/output/
+data/cache/
+data/raw_html/
+*.sqlite
+*.sqlite3
+*.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

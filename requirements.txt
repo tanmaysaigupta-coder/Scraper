@@ -1,0 +1,34 @@
+# --- async HTTP + scraping ---
+aiohttp==3.10.10
+aiolimiter==1.1.0
+tenacity==9.0.0
+selectolax==0.3.25
+playwright==1.48.0
+feedparser==6.0.11
+
+# --- data / schema ---
+pydantic==2.9.2
+pydantic-settings==2.6.1
+python-dateutil==2.9.0.post0
+dateparser==1.2.0
+PyYAML==6.0.2
+
+# --- entity resolution ---
+rapidfuzz==3.10.1
+
+# --- LLM providers ---
+google-generativeai==0.8.3
+groq==0.11.0
+openai==1.54.3          # used for OpenRouter + DeepSeek (OpenAI-compatible endpoints)
+
+# --- output sinks ---
+gspread==6.1.4
+google-auth==2.35.0
+
+# --- observability ---
+structlog==24.4.0
+
+# --- dev ---
+pytest==8.3.3
+pytest-asyncio==0.24.0
+ruff==0.7.2

@@ -1,0 +1,67 @@
+# Pipeline tuning. Everything here can be changed without touching code.
+
+crawler:
+  # global cap on concurrent outbound requests (per worker process)
+  max_concurrency: 32
+  # per-host politeness limit (requests/second)
+  per_host_rps: 4
+  request_timeout_s: 30
+  max_retries: 4
+  backoff_base_s: 1.0
+  backoff_max_s: 60.0
+  user_agent: "GraphOneResearchBot/0.1 (+https://example.com/bot; contact ops@example.com)"
+
+freshness:
+  # Phase II: only keep news / jobs published within this window
+  window_hours: 24
+  # state file recording the last successful run per source (for the
+  # "is this new since last run?" heuristic)
+  state_path: "data/cache/freshness_state.json"
+
+seen_store:
+  # dedupe backend: sqlite (local) | redis (documented for scale)
+  backend: sqlite
+  sqlite_path: "data/cache/seen.sqlite"
+  # redis_url: redis://localhost:6379/0
+
+llm:
+  # Multi-tier fallback chain, tried top to bottom. Each tier names a provider
+  # (see src/llm/providers.py) and a model id.
+  chain:
+    - provider: gemini
+      model: "gemini-1.5-flash"
+      max_input_tokens: 900000
+    - provider: groq
+      model: "llama-3.3-70b-versatile"
+      max_input_tokens: 120000
+    - provider: openrouter
+      model: "deepseek/deepseek-chat"
+      max_input_tokens: 60000
+  # retry budget per tier before falling through to the next
+  attempts_per_tier: 3
+  backoff_base_s: 2.0
+  backoff_max_s: 45.0
+  # chunking guard so payloads never trip 413 Payload Too Large
+  chunk:
+    # leave headroom below each tier's max_input_tokens
+    safety_ratio: 0.8
+    # approx chars per token for the cheap pre-tokenization length guess
+    chars_per_token: 4
+    overlap_chars: 400
+
+targets:
+  startups: 1000
+  products: 1000
+  research_papers: 1000
+
+output:
+  jsonl_dir: "data/output"
+  sheets:
+    enabled: true
+    tabs:
+      startups: "Startups"
+      products: "Products"
+      research_papers: "Research Papers"
+      jobs: "Jobs"
+      news: "News"
+      mapping_log: "Entity Mapping Log"

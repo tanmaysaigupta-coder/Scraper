@@ -1,0 +1,90 @@
+# Declarative source registry. Add a source = add a YAML block, no code change.
+#
+# NOTE: entries marked `status: PROPOSED` are sensible defaults picked during
+# scaffolding and still need a human yes/no (some sites' ToS or anti-bot posture
+# may rule them out). `status: ACTIVE` means wired and confirmed.
+
+# --------------------------------------------------------------------------- #
+# Phase I — bulk directories
+# --------------------------------------------------------------------------- #
+research_papers:
+  - name: "arXiv"
+    status: ACTIVE
+    kind: api
+    # arXiv Atom API — no key required
+    base_url: "http://export.arxiv.org/api/query"
+    categories: ["cs.AI", "cs.LG", "cs.CL", "cs.CV", "cs.NE", "stat.ML"]
+    page_size: 200
+
+  - name: "Papers with Code"
+    status: PROPOSED
+    kind: api
+    base_url: "https://paperswithcode.com/api/v1"
+    # correlates papers -> official GitHub repo for star counts
+
+startups:
+  - name: "Y Combinator Companies"
+    status: PROPOSED
+    kind: html
+    base_url: "https://www.ycombinator.com/companies"
+    note: "Algolia-backed listing; industry filter = 'Artificial Intelligence'"
+
+products:
+  - name: "There's An AI For That"
+    status: PROPOSED
+    kind: html
+    base_url: "https://theresanaiforthat.com"
+    note: "large AI product directory; check anti-bot posture"
+
+# --------------------------------------------------------------------------- #
+# Phase II — 5 news sources + 5 job boards (24h freshness)
+# --------------------------------------------------------------------------- #
+news:
+  - name: "VentureBeat AI"
+    status: PROPOSED
+    kind: rss
+    feed_url: "https://venturebeat.com/category/ai/feed/"
+  - name: "TechCrunch AI"
+    status: PROPOSED
+    kind: rss
+    feed_url: "https://techcrunch.com/category/artificial-intelligence/feed/"
+  - name: "The Verge AI"
+    status: PROPOSED
+    kind: rss
+    feed_url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"
+  - name: "MIT Technology Review AI"
+    status: PROPOSED
+    kind: rss
+    feed_url: "https://www.technologyreview.com/topic/artificial-intelligence/feed"
+  - name: "Ars Technica AI"
+    status: PROPOSED
+    kind: rss
+    feed_url: "https://arstechnica.com/ai/feed/"
+
+jobs:
+  - name: "ai-jobs.net"
+    status: PROPOSED
+    kind: rss
+    feed_url: "https://ai-jobs.net/feed/"
+  - name: "Remotive"
+    status: PROPOSED
+    kind: api
+    base_url: "https://remotive.com/api/remote-jobs"
+    params: { category: "software-dev" }
+  - name: "RemoteOK"
+    status: PROPOSED
+    kind: api
+    base_url: "https://remoteok.com/api"
+  - name: "We Work Remotely — Programming"
+    status: PROPOSED
+    kind: rss
+    feed_url: "https://weworkremotely.com/categories/remote-programming-jobs.rss"
+  - name: "Himalayas"
+    status: PROPOSED
+    kind: api
+    base_url: "https://himalayas.app/jobs/api"
+
+# --------------------------------------------------------------------------- #
+# Phase IV — seed list of canonical AI startups (mock DB, ~50 entries)
+# --------------------------------------------------------------------------- #
+entity_seed_file: "config/entity_seed.yaml"

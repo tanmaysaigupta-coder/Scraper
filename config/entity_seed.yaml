@@ -1,0 +1,106 @@
+# Mock canonical-entity DB for Phase IV (~50 known AI companies).
+# In production this is a table in the primary store, continuously curated.
+
+entities:
+  - canonical: "OpenAI"
+    aliases: ["Open AI", "OpenAI, Inc.", "OpenAI Inc", "OpenAI LP"]
+  - canonical: "Anthropic"
+    aliases: ["Anthropic PBC", "Anthropic, PBC"]
+  - canonical: "Google DeepMind"
+    aliases: ["DeepMind", "Google Deepmind", "DeepMind Technologies"]
+  - canonical: "Mistral AI"
+    aliases: ["Mistral", "MistralAI"]
+  - canonical: "Cohere"
+    aliases: ["Cohere AI", "Cohere Inc"]
+  - canonical: "Hugging Face"
+    aliases: ["HuggingFace", "Hugging Face, Inc."]
+  - canonical: "Stability AI"
+    aliases: ["StabilityAI", "Stability.ai"]
+  - canonical: "Perplexity AI"
+    aliases: ["Perplexity", "Perplexity.ai"]
+  - canonical: "xAI"
+    aliases: ["x.AI", "X AI"]
+  - canonical: "Scale AI"
+    aliases: ["ScaleAI", "Scale", "Scale AI, Inc."]
+  - canonical: "Databricks"
+    aliases: ["Data Bricks"]
+  - canonical: "Snowflake"
+    aliases: ["Snowflake Computing"]
+  - canonical: "NVIDIA"
+    aliases: ["Nvidia", "NVIDIA Corporation"]
+  - canonical: "Meta AI"
+    aliases: ["FAIR", "Facebook AI Research", "Meta AI Research"]
+  - canonical: "Microsoft Research"
+    aliases: ["MSR"]
+  - canonical: "Adept AI"
+    aliases: ["Adept", "Adept AI Labs"]
+  - canonical: "Inflection AI"
+    aliases: ["Inflection"]
+  - canonical: "Character.AI"
+    aliases: ["Character AI", "CharacterAI", "c.ai"]
+  - canonical: "Runway"
+    aliases: ["Runway ML", "RunwayML", "Runway AI"]
+  - canonical: "ElevenLabs"
+    aliases: ["Eleven Labs", "11Labs"]
+  - canonical: "Midjourney"
+    aliases: ["Mid Journey"]
+  - canonical: "Together AI"
+    aliases: ["Together", "Together.ai", "Together Computer"]
+  - canonical: "Groq"
+    aliases: ["Groq Inc"]
+  - canonical: "Cerebras Systems"
+    aliases: ["Cerebras"]
+  - canonical: "LangChain"
+    aliases: ["Lang Chain"]
+  - canonical: "LlamaIndex"
+    aliases: ["Llama Index", "GPT Index"]
+  - canonical: "Pinecone"
+    aliases: ["Pinecone Systems"]
+  - canonical: "Weaviate"
+    aliases: []
+  - canonical: "Chroma"
+    aliases: ["ChromaDB", "Chroma Inc"]
+  - canonical: "Weights & Biases"
+    aliases: ["Weights and Biases", "wandb", "W&B"]
+  - canonical: "Replicate"
+    aliases: []
+  - canonical: "Modal"
+    aliases: ["Modal Labs"]
+  - canonical: "Fireworks AI"
+    aliases: ["Fireworks", "Fireworks.ai"]
+  - canonical: "Anyscale"
+    aliases: ["Any Scale"]
+  - canonical: "Contextual AI"
+    aliases: ["Contextual"]
+  - canonical: "Glean"
+    aliases: ["Glean Technologies"]
+  - canonical: "Harvey"
+    aliases: ["Harvey AI"]
+  - canonical: "Cursor"
+    aliases: ["Anysphere", "Cursor AI"]
+  - canonical: "Codeium"
+    aliases: ["Exafunction"]
+  - canonical: "Poolside"
+    aliases: ["Poolside AI"]
+  - canonical: "Magic"
+    aliases: ["Magic AI", "Magic.dev"]
+  - canonical: "Sierra"
+    aliases: ["Sierra AI"]
+  - canonical: "Writer"
+    aliases: ["Writer.com", "Writer AI"]
+  - canonical: "Jasper"
+    aliases: ["Jasper AI", "Jasper.ai"]
+  - canonical: "Synthesia"
+    aliases: []
+  - canonical: "DeepL"
+    aliases: ["Deep L"]
+  - canonical: "Assembly AI"
+    aliases: ["AssemblyAI"]
+  - canonical: "Deepgram"
+    aliases: ["Deep Gram"]
+  - canonical: "LlamaCloud"
+    aliases: []
+  - canonical: "Lightning AI"
+    aliases: ["Grid.ai", "Lightning"]
+  - canonical: "Voxel51"
+    aliases: ["Voxel 51"]
