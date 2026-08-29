@@ -30,8 +30,31 @@ from src.schemas import (
 )
 from src.sinks.jsonl_sink import JsonlSink
 from src.sinks.sheets_sink import SheetsSink
+from src.sinks.xlsx_sink import XlsxSink
 
 log = get_logger("pipeline")
+
+
+class _TabularSinks:
+    """Fan a vertical's tab out to every configured tabular sink (xlsx always,
+    Google Sheets when a service-account key is available)."""
+
+    def __init__(self, *sinks) -> None:
+        self._sinks = [s for s in sinks if s is not None]
+
+    def write_records(self, *a, **kw) -> None:
+        for s in self._sinks:
+            try:
+                s.write_records(*a, **kw)
+            except Exception as exc:  # noqa: BLE001 - one sink failing must not lose the others
+                log.warning("sink_write_failed", sink=type(s).__name__, err=str(exc)[:160])
+
+    def write_rows(self, *a, **kw) -> None:
+        for s in self._sinks:
+            try:
+                s.write_rows(*a, **kw)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("sink_write_failed", sink=type(s).__name__, err=str(exc)[:160])
 
 PAPER_COLUMNS = [
     "schemaVersion", "recordType", "source.name", "source.url",
@@ -246,27 +269,50 @@ async def _shape_news(llm: LLMOrchestrator, item: dict) -> NewsRecord | None:
     return NewsRecord(source=Source(name=item["source_name"], url=item["url"]), content=content)
 
 
+_ROLE_FAMILY_RULES = [
+    ("Engineering", ("engineer", "developer", "programmer", "sre", "devops", "backend",
+                     "frontend", "full stack", "full-stack", "software", "platform", "infra")),
+    ("Data / ML", ("machine learning", " ml ", "data scientist", "data engineer", "mlops",
+                   "ai researcher", "nlp", "computer vision", "research scientist")),
+    ("Product", ("product manager", "product owner", "program manager", " pm ", "product lead")),
+    ("Design", ("designer", "ux", "ui ", "product design", "brand")),
+    ("Sales / GTM", ("sales", "account executive", "account manager", "business development",
+                     "gtm", "revenue", "partnerships")),
+    ("Marketing", ("marketing", "growth", "seo", "content", "demand gen", "community")),
+    ("Data / Analytics", ("analyst", "analytics", "bi ")),
+    ("Operations", ("operations", " ops", "recruiter", "people ", "hr ", "finance",
+                    "accounting", "legal", "counsel", "support", "customer success")),
+    ("Research", ("research",)),
+]
+
+
+def _role_family(title: str) -> str | None:
+    t = f" {title.lower()} "
+    for family, kws in _ROLE_FAMILY_RULES:
+        if any(k in t for k in kws):
+            return family
+    return None
+
+
 async def _shape_job(llm: LLMOrchestrator, item: dict, resolver: EntityResolver) -> JobRecord | None:
+    # Jobs already come with company + date + remote from the feed APIs; role_family
+    # is a cheap deterministic classification. The LLM is only a fallback when the
+    # company name is missing -- keeps ~1 LLM call per job off the rate-limited tiers.
     company_raw = item.get("company") or ""
-    role_family = None
-    text = f"{item.get('title','')}\n\n{item.get('raw_summary','')}".strip()
-    if text:
-        try:
-            res = await llm.extract(
-                raw_text=text,
-                target=JobContent,
-                instructions=(
-                    "Extract the hiring company, ISO-8601 publication date if present, "
-                    "remote eligibility, and a high-level role_family such as "
-                    "'Engineering', 'Research', 'Product', 'Sales', 'Design'."
-                ),
-                context={"known_company": company_raw, "source_url": item["url"]},
-            )
-            jc: JobContent = res.model  # type: ignore[assignment]
-            company_raw = jc.company or company_raw
-            role_family = jc.role_family
-        except ExtractionFailed:
-            pass
+    role_family = _role_family(item.get("title", ""))
+
+    if not company_raw:
+        text = f"{item.get('title','')}\n\n{item.get('raw_summary','')}".strip()
+        if text:
+            try:
+                res = await llm.extract(
+                    raw_text=text, target=JobContent,
+                    instructions="Extract only the hiring company name into `company`.",
+                    context={"source_url": item["url"]},
+                )
+                company_raw = (res.model.company or "").strip()  # type: ignore[attr-defined]
+            except ExtractionFailed:
+                pass
 
     canonical = resolver.resolve_str(company_raw) if company_raw else ""
     content = JobContent(
@@ -283,7 +329,9 @@ async def _shape_job(llm: LLMOrchestrator, item: dict, resolver: EntityResolver)
 async def main(which: str) -> None:
     configure_logging()
     jsonl = JsonlSink()
-    sheets = SheetsSink()
+    xlsx = XlsxSink()
+    gsheets = SheetsSink()
+    sheets = _TabularSinks(xlsx, gsheets if gsheets.enabled else None)
     resolver = EntityResolver.from_seed_file(
         get_sources_config()["entity_seed_file"]
     )
@@ -316,7 +364,11 @@ async def main(which: str) -> None:
         jsonl.write_dicts("entity_mapping_log", mapping_rows)
         sheets.write_rows("mapping_log", mapping_rows, MAPPING_COLUMNS)
 
-    log.info("pipeline_complete", counts=jsonl.counts)
+    workbook = xlsx.save()
+    log.info("pipeline_complete", counts=jsonl.counts, workbook=str(workbook))
+    print(f"\nWorkbook written: {workbook}\n"
+          f"Upload it to Google Drive and 'Open with Google Sheets', then Share -> "
+          f"Anyone with the link -> Viewer to get the public link for submission.")
 
 
 if __name__ == "__main__":
