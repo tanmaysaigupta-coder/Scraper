@@ -48,25 +48,31 @@ def _rss_items(raw: str) -> list[dict]:
 
 
 def _api_job_items(payload: Any, source_name: str) -> list[dict]:
-    """Normalize the common remote-job API shapes (Remotive / RemoteOK / Himalayas)."""
+    """Normalize the common remote-job API shapes (Remotive / RemoteOK / Jobicy / Arbeitnow)."""
     if isinstance(payload, dict) and "jobs" in payload:
         rows = payload["jobs"]
     elif isinstance(payload, list):
         rows = [r for r in payload if isinstance(r, dict) and r.get("id") != "legal"]
+    elif isinstance(payload, dict):
+        rows = payload.get("results") or payload.get("data") or []
     else:
-        rows = payload.get("results", []) if isinstance(payload, dict) else []
+        rows = []
 
     items = []
     for r in rows:
         items.append({
-            "title": r.get("title") or r.get("position") or "",
-            "url": r.get("url") or r.get("apply_url") or r.get("application_link") or "",
+            "title": r.get("title") or r.get("position") or r.get("jobTitle") or "",
+            "url": (r.get("url") or r.get("apply_url") or r.get("application_link")
+                    or r.get("job_url") or ""),
             "date_raw": (r.get("publication_date") or r.get("date") or r.get("pubDate")
-                         or r.get("created_at") or ""),
-            "company": r.get("company_name") or r.get("company") or "",
-            "is_remote": True if "remote" in source_name.lower() else r.get("remote"),
-            "location": r.get("candidate_required_location") or r.get("location") or "",
-            "summary": r.get("description", "")[:4000],
+                         or r.get("created_at") or r.get("epoch")
+                         or r.get("created") or ""),
+            "company": (r.get("company_name") or r.get("company") or r.get("companyName") or ""),
+            "is_remote": True if "remote" in source_name.lower() else r.get("remote", True),
+            "location": (r.get("candidate_required_location") or r.get("location")
+                         or r.get("jobGeo") or r.get("job_geo") or ""),
+            "summary": (r.get("description") or r.get("jobExcerpt") or r.get("jobDescription")
+                        or "")[:4000],
         })
     return items
 

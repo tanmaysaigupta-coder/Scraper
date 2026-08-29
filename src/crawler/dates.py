@@ -34,11 +34,22 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def parse_date(value: str | None, *, now: datetime | None = None) -> datetime | None:
-    if not value:
+def parse_date(value: object | None, *, now: datetime | None = None) -> datetime | None:
+    if value is None or value == "":
         return None
     now = now or _utcnow()
-    text = value.strip()
+
+    # numeric epoch (seconds or milliseconds) — some job APIs return ints
+    if isinstance(value, int | float) or (isinstance(value, str) and value.strip().isdigit()):
+        ts = float(value)
+        if ts > 1e11:  # milliseconds
+            ts /= 1000.0
+        try:
+            return datetime.fromtimestamp(ts, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    text = str(value).strip()
 
     m = _REL_RE.search(text)
     if m:

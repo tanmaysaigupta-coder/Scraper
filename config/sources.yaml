@@ -55,48 +55,49 @@ products:
 # --------------------------------------------------------------------------- #
 news:
   - name: "VentureBeat AI"
-    status: PROPOSED
+    status: ACTIVE
     kind: rss
     feed_url: "https://venturebeat.com/category/ai/feed/"
   - name: "TechCrunch AI"
-    status: PROPOSED
+    status: ACTIVE
     kind: rss
     feed_url: "https://techcrunch.com/category/artificial-intelligence/feed/"
   - name: "The Verge AI"
-    status: PROPOSED
+    status: ACTIVE
     kind: rss
     feed_url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"
   - name: "MIT Technology Review AI"
-    status: PROPOSED
+    status: ACTIVE
     kind: rss
     feed_url: "https://www.technologyreview.com/topic/artificial-intelligence/feed"
   - name: "Ars Technica AI"
-    status: PROPOSED
+    status: ACTIVE
     kind: rss
     feed_url: "https://arstechnica.com/ai/feed/"
 
 jobs:
-  - name: "ai-jobs.net"
-    status: PROPOSED
-    kind: rss
-    feed_url: "https://ai-jobs.net/feed/"
+  - name: "Jobicy"
+    status: ACTIVE
+    kind: api
+    base_url: "https://jobicy.com/api/v2/remote-jobs"
+    params: { count: "50", industry: "engineering" }
   - name: "Remotive"
-    status: PROPOSED
+    status: ACTIVE
     kind: api
     base_url: "https://remotive.com/api/remote-jobs"
     params: { category: "software-dev" }
   - name: "RemoteOK"
-    status: PROPOSED
+    status: ACTIVE
     kind: api
-    base_url: "https://remoteok.com/api"
+    base_url: "https://remoteok.com/api?tags=ai"
   - name: "We Work Remotely — Programming"
-    status: PROPOSED
+    status: ACTIVE
     kind: rss
     feed_url: "https://weworkremotely.com/categories/remote-programming-jobs.rss"
   - name: "Himalayas"
-    status: PROPOSED
-    kind: api
-    base_url: "https://himalayas.app/jobs/api"
+    status: ACTIVE
+    kind: rss
+    feed_url: "https://himalayas.app/jobs/rss"
 
 # --------------------------------------------------------------------------- #
 # Phase IV — seed list of canonical AI startups (mock DB, ~50 entries)
