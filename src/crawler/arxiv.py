@@ -66,11 +66,13 @@ async def iter_arxiv(
                 published = datetime.fromisoformat(published_raw.replace("Z", "+00:00"))
             except ValueError:
                 published = None
+            comment_node = e.css_first("arxiv\\:comment")
             yield {
                 "arxiv_id": arxiv_id,
                 "title": " ".join(_text(e, "title").split()),
                 "authors": [a.text(strip=True) for a in e.css("author name")],
                 "summary": _text(e, "summary"),
+                "comment": comment_node.text(strip=True) if comment_node else "",
                 "paper_url": _text(e, "id") or pdf_url,
                 "pdf_url": pdf_url,
                 "published_date": published.astimezone(UTC) if published else None,
