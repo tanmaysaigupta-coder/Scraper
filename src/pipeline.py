@@ -70,19 +70,49 @@ async def run_papers(jsonl: JsonlSink, sheets: SheetsSink) -> None:
     log.info("papers_done", count=len(records))
 
 
-async def run_directory_vertical(
-    vertical: str, jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityResolver
-) -> None:
-    target = get_pipeline_config()["targets"][vertical]
+async def run_startups(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityResolver) -> None:
+    """YC directory via Algolia -> direct deterministic map (no LLM needed)."""
+    from src.crawler.http import AsyncFetcher
+    from src.crawler.yc import iter_yc_companies
+    from src.schemas import StartupContent, StartupData, StartupRecord
+
+    target = get_pipeline_config()["targets"]["startups"]
+    records: list[StartupRecord] = []
+    async with AsyncFetcher() as fetcher:
+        async for c in iter_yc_companies(fetcher, max_records=target):
+            for fn in c.get("former_names") or []:
+                resolver.register_alias(fn, c["name"])
+            canonical = resolver.resolve_str(c["name"])
+            try:
+                records.append(StartupRecord(
+                    source=Source(name="Y Combinator", url=c["source_url"]),
+                    content=StartupContent(
+                        entityName=canonical,
+                        data=StartupData(employeeCount=_as_int(c.get("team_size"))),
+                    ),
+                ))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("startup_record_invalid", name=c.get("name"), err=str(exc)[:140])
+    jsonl.write("STARTUP", records)
+    sheets.write_records("startups", records, STARTUP_COLUMNS)
+    log.info("startups_done", count=len(records))
+
+
+async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityResolver) -> None:
+    target = get_pipeline_config()["targets"]["products"]
     records = []
-    async for rec in crawl_directory(vertical, max_records=target, resolver=resolver):
+    async for rec in crawl_directory("products", max_records=target, resolver=resolver):
         records.append(rec)
-    rt = "STARTUP" if vertical == "startups" else "PRODUCT"
-    cols = STARTUP_COLUMNS if vertical == "startups" else PRODUCT_COLUMNS
-    tab = "startups" if vertical == "startups" else "products"
-    jsonl.write(rt, records)
-    sheets.write_records(tab, records, cols)
-    log.info("directory_vertical_done", vertical=vertical, count=len(records))
+    jsonl.write("PRODUCT", records)
+    sheets.write_records("products", records, PRODUCT_COLUMNS)
+    log.info("products_done", count=len(records))
+
+
+def _as_int(v) -> int | None:
+    try:
+        return int(v) if v not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def run_feed_vertical(
@@ -182,9 +212,9 @@ async def main(which: str) -> None:
     if which in ("all", "papers"):
         tasks.append(run_papers(jsonl, sheets))
     if which in ("all", "startups"):
-        tasks.append(run_directory_vertical("startups", jsonl, sheets, resolver))
+        tasks.append(run_startups(jsonl, sheets, resolver))
     if which in ("all", "products"):
-        tasks.append(run_directory_vertical("products", jsonl, sheets, resolver))
+        tasks.append(run_products(jsonl, sheets, resolver))
     if which in ("all", "news"):
         tasks.append(run_feed_vertical("news", jsonl, sheets, resolver))
     if which in ("all", "jobs"):

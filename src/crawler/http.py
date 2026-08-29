@@ -98,8 +98,18 @@ class AsyncFetcher:
         _, body = await self._request("GET", url, headers=merged, **kw)
         return json.loads(body)
 
+    async def post_json(self, url: str, *, json_body: Any, headers: dict | None = None,
+                        **kw: Any) -> Any:
+        import json as _json
+
+        merged = {"Accept": "application/json", "Content-Type": "application/json"}
+        if headers:
+            merged.update(headers)
+        _, body = await self._request("POST", url, headers=merged, data=_json.dumps(json_body), **kw)
+        return _json.loads(body)
+
     async def _request(self, method: str, url: str, *, headers: dict | None = None,
-                       params: dict | None = None) -> tuple[int, str]:
+                       params: dict | None = None, data: str | None = None) -> tuple[int, str]:
         if self._session is None:
             raise RuntimeError("AsyncFetcher used outside 'async with'")
         host = URL(url).host or ""
@@ -112,7 +122,7 @@ class AsyncFetcher:
             try:
                 async with self._sem, self._limiter(host):
                     async with self._session.request(
-                        method, url, headers=merged, params=params,
+                        method, url, headers=merged, params=params, data=data,
                         proxy=self._proxy, allow_redirects=True,
                     ) as resp:
                         text = await resp.text()

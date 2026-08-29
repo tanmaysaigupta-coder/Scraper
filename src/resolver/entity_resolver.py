@@ -86,6 +86,14 @@ class EntityResolver:
         self._canon_by_norm[n] = canonical
         self._canon_by_despace[_despace(n)] = canonical
 
+    def register_alias(self, alias: str, canonical: str) -> None:
+        """Add a runtime alias (e.g. a startup's former name from the source)."""
+        if not alias or not alias.strip() or not canonical:
+            return
+        if canonical not in self._canonicals:
+            self._register(canonical)
+        self._aliases[normalize(alias)] = canonical
+
     def resolve(self, raw: str) -> Resolution:
         if not raw or not raw.strip():
             res = Resolution(raw, "", "new", 0.0, True)

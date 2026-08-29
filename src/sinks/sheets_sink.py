@@ -12,6 +12,7 @@ names (`content.entityName`, `source.url`, ...).
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -37,11 +38,17 @@ def _flatten(obj: Any, prefix: str = "") -> dict[str, Any]:
 class SheetsSink:
     def __init__(self) -> None:
         cfg = get_pipeline_config()["output"]["sheets"]
-        self.enabled = bool(cfg.get("enabled"))
         self._tab_names = cfg["tabs"]
         self._settings = get_settings()
         self._gc = None
         self._ss = None
+        # Enabled only when configured AND credentials are actually present, so a
+        # keyless run still completes and writes JSONL instead of crashing.
+        sa_path = Path(self._settings.google_service_account_json)
+        self.enabled = bool(cfg.get("enabled") and self._settings.gsheet_id and sa_path.exists())
+        if cfg.get("enabled") and not self.enabled:
+            log.warning("sheets_not_configured",
+                        have_id=bool(self._settings.gsheet_id), have_sa=sa_path.exists())
 
     def _connect(self) -> None:
         if self._ss is not None:
@@ -49,8 +56,6 @@ class SheetsSink:
         import gspread
         from google.oauth2.service_account import Credentials
 
-        if not self._settings.gsheet_id:
-            raise RuntimeError("GSHEET_ID not set")
         creds = Credentials.from_service_account_file(
             self._settings.google_service_account_json,
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
