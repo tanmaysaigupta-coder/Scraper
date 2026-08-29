@@ -253,12 +253,26 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
             records.extend(r)
         log.info("products_progress", done=len(records), batches=len(pending))
 
-    # secondary top-up from TheresAnAIForThat if PH under target
+    def _dedupe(recs: list[ProductRecord]) -> list[ProductRecord]:
+        seen: set[str] = set()
+        uniq = []
+        for r in recs:
+            u = str(r.source.url)
+            if u not in seen:
+                seen.add(u)
+                uniq.append(r)
+        return uniq
+
+    records = _dedupe(records)
+
+    # secondary top-up from TheresAnAIForThat until the 1,000 minimum is cleared
+    # (a PH topic can genuinely hold slightly fewer than 1,000 recent products)
     if len(records) < target:
-        remaining = target - len(records)
+        remaining = target - len(records) + 20  # margin for further dupes
         log.info("products_topup_taaft", remaining=remaining)
         async for rec in crawl_directory("products", max_records=remaining, resolver=resolver):
             records.append(rec)
+        records = _dedupe(records)
 
     jsonl.write("PRODUCT", records)
     sheets.write_records("products", records, PRODUCT_COLUMNS)
