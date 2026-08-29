@@ -106,7 +106,7 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
     from src.crawler.extract_text import extract_main_text
     from src.crawler.http import AsyncFetcher, FetchError
     from src.crawler.producthunt import iter_producthunt
-    from src.schemas import PricingModel, ProductContent, ProductRecord
+    from src.schemas import PricingModel, ProductContent, ProductDraft, ProductRecord
 
     target = get_pipeline_config()["targets"]["products"]
     llm = LLMOrchestrator.from_config()
@@ -133,7 +133,7 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
         try:
             async with sem:
                 res = await llm.extract(
-                    raw_text=source_text, target=ProductContent,
+                    raw_text=source_text, target=ProductDraft,
                     instructions=(
                         "startupName = the name of the company/brand that publishes this "
                         "product. Only use a company name that literally appears in the text; "
@@ -145,7 +145,7 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
                     ),
                     context={"makers": item.get("makers"), "source_url": item["url"]},
                 )
-            pc: ProductContent = res.model  # type: ignore[assignment]
+            pc: ProductDraft = res.model  # type: ignore[assignment]
             cand = (pc.startupName or "").strip()
             # guard against hallucinated companies: keep only if it shows up in the source
             if cand and (cand.lower() in source_text.lower()

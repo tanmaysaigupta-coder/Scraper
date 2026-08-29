@@ -79,6 +79,22 @@ class ProductRecord(RecordBase):
 
 
 # --------------------------------------------------------------------------- #
+# Lenient "draft" models — used ONLY as LLM extraction targets. Every field is
+# optional so a model that emits `null` doesn't fail validation and burn the
+# whole fallback chain; the caller then fills gaps deterministically (source
+# name, resolver) before building the strict record above.
+# --------------------------------------------------------------------------- #
+class StartupDraft(BaseModel):
+    entityName: str | None = None
+    employeeCount: int | None = None
+
+
+class ProductDraft(BaseModel):
+    startupName: str | None = None
+    pricingModel: PricingModel | None = None
+
+
+# --------------------------------------------------------------------------- #
 # Research paper
 # --------------------------------------------------------------------------- #
 class ResearchPaperContent(BaseModel):

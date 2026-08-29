@@ -31,10 +31,24 @@ startups:
 
 products:
   - name: "There's An AI For That"
-    status: PROPOSED
+    status: ACTIVE
     kind: html
     base_url: "https://theresanaiforthat.com"
-    note: "large AI product directory; check anti-bot posture"
+    # Every page is Cloudflare-gated (direct fetch => 403). Listing pages need a
+    # JS render to populate the tool cards; detail pages do not. Both go through
+    # the ScraperAPI escalation ladder. This is the Phase V demonstration: a
+    # site that hard-blocks automated requests, scraped successfully.
+    render: true            # listing pages: ScraperAPI render=true
+    detail_render: false    # /ai/<slug>/ pages: ScraperAPI render=false (cheaper)
+    list_urls:
+      - "newest/"
+      - "period/2026/08/28/"
+      - "period/2026/08/21/"
+      - "period/2026/08/14/"
+    selectors:
+      item: "a.ai_link"
+      link: "self"          # the matched <a> is itself the tool link
+    note: "Phase V demonstration: aggressive anti-bot, bypassed via ScraperAPI residential + render"
 
 # --------------------------------------------------------------------------- #
 # Phase II — 5 news sources + 5 job boards (24h freshness)

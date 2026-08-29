@@ -69,16 +69,28 @@ async def browser_page(*, proxy: str | None = None):
             await browser.close()
 
 
+class BrowserUnavailable(RuntimeError):
+    """Playwright/Chromium could not be launched in this environment."""
+
+
 async def render(url: str, *, proxy: str | None = None, wait_selector: str | None = None) -> str:
-    async with browser_page(proxy=proxy) as page:
-        await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-        await asyncio.sleep(random.uniform(1.2, 3.0))
-        if wait_selector:
-            try:
-                await page.wait_for_selector(wait_selector, timeout=15_000)
-            except Exception:  # noqa: BLE001
-                log.info("render_selector_timeout", url=url, selector=wait_selector)
-        html = await page.content()
-        if looks_like_challenge(html, 200):
-            log.warning("render_challenged", url=url)
-        return html
+    try:
+        async with browser_page(proxy=proxy) as page:
+            await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            await asyncio.sleep(random.uniform(1.2, 3.0))
+            if wait_selector:
+                try:
+                    await page.wait_for_selector(wait_selector, timeout=15_000)
+                except Exception:  # noqa: BLE001
+                    log.info("render_selector_timeout", url=url, selector=wait_selector)
+            html = await page.content()
+            if looks_like_challenge(html, 200):
+                log.warning("render_challenged", url=url)
+            return html
+    except ImportError as exc:
+        raise BrowserUnavailable("playwright not installed") from exc
+    except Exception as exc:  # noqa: BLE001 - launch failures ("spawn UNKNOWN"), sandbox denials
+        msg = str(exc)
+        if "spawn" in msg or "launch" in msg.lower() or "executable" in msg.lower():
+            raise BrowserUnavailable(f"cannot launch browser: {msg[:160]}") from exc
+        raise
