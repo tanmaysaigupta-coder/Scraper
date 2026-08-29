@@ -15,7 +15,6 @@ comes from config (`llm.chain[*].model`), so swapping models is a config edit.
 from __future__ import annotations
 
 import abc
-import asyncio
 import re
 from collections.abc import Callable
 
@@ -55,29 +54,55 @@ class Provider(abc.ABC):
 
 class GeminiProvider(Provider):
     name = "gemini"
+    _API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     def __init__(self) -> None:
         key = get_settings().gemini_api_key
         if not key:
             raise AuthError("GEMINI_API_KEY not set", provider=self.name, status=401)
-        import google.generativeai as genai  # lazy
-
-        genai.configure(api_key=key)
-        self._genai = genai
+        self._key = key
 
     async def complete(self, system, user, *, model, temperature=0.0) -> str:
-        def _call() -> str:
-            m = self._genai.GenerativeModel(model, system_instruction=system)
-            resp = m.generate_content(
-                user,
-                generation_config={"temperature": temperature, "response_mime_type": "application/json"},
-            )
-            return resp.text
+        # Direct REST call. The google-generativeai SDK defaults to a gRPC
+        # transport that is minutes-per-call slow on some networks; REST is
+        # 10-30x faster and genuinely async here (no thread pool).
+        import aiohttp
+
+        payload = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {
+                "temperature": temperature,
+                "responseMimeType": "application/json",
+            },
+        }
+        url = self._API.format(model=model)
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.post(
+                    url, params={"key": self._key}, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=120),
+                ) as resp:
+                    body = await resp.text()
+                    if resp.status == 429:
+                        raise RateLimited(body[:200], provider=self.name)
+                    if resp.status in (400, 413) and _CONTEXT_HINTS.search(body):
+                        raise PayloadTooLarge(body[:200], provider=self.name, status=413)
+                    if resp.status in (401, 403):
+                        raise AuthError(body[:200], provider=self.name, status=resp.status)
+                    if resp.status >= 400:
+                        raise ProviderError(f"HTTP {resp.status}: {body[:200]}",
+                                            provider=self.name, status=resp.status)
+                    data = __import__("json").loads(body)
+        except aiohttp.ClientError as exc:
+            raise ProviderError(str(exc), provider=self.name) from exc
 
         try:
-            return await asyncio.to_thread(_call)
-        except Exception as exc:  # noqa: BLE001
-            raise _classify_generic(exc, self.name) from exc
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError) as exc:
+            reason = data.get("promptFeedback") or data
+            raise ContentError(f"no text in response: {str(reason)[:200]}",
+                               provider=self.name) from exc
 
 
 class _OpenAICompatProvider(Provider):

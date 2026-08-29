@@ -17,9 +17,9 @@ PyYAML==6.0.2
 rapidfuzz==3.10.1
 
 # --- LLM providers ---
-google-generativeai==0.8.3
-groq==0.11.0
-openai==1.54.3          # used for OpenRouter + DeepSeek (OpenAI-compatible endpoints)
+# Gemini is called via its REST endpoint with aiohttp (the google-generativeai
+# SDK's default gRPC transport is minutes-per-call slow on some networks).
+openai>=1.99            # used for Groq / OpenRouter / DeepSeek (OpenAI-compatible endpoints)
 
 # --- output sinks ---
 gspread==6.1.4

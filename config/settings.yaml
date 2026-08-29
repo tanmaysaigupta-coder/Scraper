@@ -28,12 +28,16 @@ llm:
   # Multi-tier fallback chain, tried top to bottom. Each tier names a provider
   # (see src/llm/providers.py) and a model id.
   chain:
+    # Tier 1: Groq — fast (~1s) and reliable; primary workhorse.
+    - provider: groq
+      model: "openai/gpt-oss-120b"
+      max_input_tokens: 120000
+    # Tier 2: Gemini Flash — huge 900k context for oversized docs; can 503 under
+    # load, so it sits behind Groq.
     - provider: gemini
       model: "gemini-flash-latest"
       max_input_tokens: 900000
-    - provider: groq
-      model: "llama-3.3-70b-versatile"
-      max_input_tokens: 120000
+    # Tier 3: DeepSeek via OpenRouter — last-resort independent quota pool.
     - provider: openrouter
       model: "deepseek/deepseek-chat"
       max_input_tokens: 60000
