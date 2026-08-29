@@ -1,6 +1,33 @@
 # Architecture & Production Design
 
-_GraphOne / FrontierAtlas Intelligence Graph — ingestion pipeline. Max 3 pages._
+_GraphOne / FrontierAtlas Intelligence Graph — ingestion pipeline._
+
+## 0. What is built (trial scope)
+
+| Vertical | Source (implemented) | Extraction |
+|---|---|---|
+| Startups | Y Combinator directory via its Algolia index (public search key scraped live) | direct field map — **no LLM**, zero hallucination surface |
+| Products | Product Hunt v2 GraphQL (AI topics); TheresAnAIForThat via ScraperAPI as the anti-bot demo + top-up | LLM draft → guarded (`startupName` kept only if present in source or a known canonical) |
+| Research papers | arXiv Atom API → GitHub repo discovery (abstract, `comment`, full-text HTML) → **live star count** via GitHub REST | structured; LLM optional. `require_github` keeps only rows that carry metrics |
+| News | 5 RSS feeds (VentureBeat, TechCrunch, The Verge, MIT Tech Review, Ars Technica) | full-text extraction; 24 h hard gate |
+| Jobs | Jobicy, Remotive, RemoteOK, We Work Remotely, Himalayas | company/date/remote from the feed; `role_family` = deterministic classifier; LLM only fills a missing company |
+
+**LLM chain (config `llm.chain`):** Groq `openai/gpt-oss-120b` → Gemini
+`gemini-flash-latest` (900k context, called over REST) → DeepSeek
+`deepseek/deepseek-chat` via OpenRouter. A content-keyed on-disk cache
+(`data/cache/extraction_cache.sqlite`) makes a rate-limited run resumable for
+free.
+
+**Anti-bot (Phase V), demonstrated not just documented:** direct fetch →
+ScraperAPI (residential IPs, `render=false`) → ScraperAPI `render=true`
+(server-side browser) → local Playwright. TheresAnAIForThat returns HTTP 403 to
+a direct request on every page; the pipeline pulls it successfully through this
+ladder.
+
+**Output:** append-only JSONL (source of truth) + a 6-tab `.xlsx` workbook
+(**Startups · Products · Research Papers · Jobs · News · Entity Mapping Log**);
+a Google Sheets API writer is included for environments that permit
+service-account keys.
 
 ## 1. Scale strategy — collecting 500,000+ records without manual intervention
 
@@ -43,19 +70,23 @@ scaled horizontally.
 ## 2. Handling 413 (context overflow) and 429 (rate limits) at scale
 
 **429 — rate limits.**
+
 - Per-provider **client-side limiter** (token bucket) sized to the plan's
   documented RPM/TPM, shared across extract pods via Redis so aggregate load
   stays under quota.
 - On a 429 response: honour `Retry-After` if present, else **exponential
   backoff with full jitter** (`base·2^attempt · rand(0.5,1.5)`), capped.
   `attempts_per_tier` retries, then **fall through to the next tier** in the
-  chain (Gemini Flash → Groq Llama-3 → DeepSeek). Different providers =
-  independent quota pools, so a fallback is also a load-shedding valve.
+  chain (Groq → Gemini Flash → DeepSeek). Different providers = independent
+  quota pools, so a fallback is also a load-shedding valve.
+- The content-keyed extraction cache means a run interrupted by a rate-limit
+  storm resumes without re-paying for anything already extracted.
 - Circuit breaker: if a tier returns 429 for >X% of calls over a window, skip
   it for a cooldown period instead of hammering it.
 - The same policy applies to source sites (HTTP 429/503) in `AsyncFetcher`.
 
 **413 — context window / payload too large.**
+
 - **Pre-flight guard.** `ChunkPlan.budget_chars()` = `max_input_tokens ·
   safety_ratio` minus reserves for prompt + response. Cheap char/token estimate,
   deliberately conservative — most docs never approach the limit.
@@ -97,27 +128,28 @@ scaled horizontally.
 
 ## 4. Storage strategy
 
-| Concern | Choice | Why |
+| Concern | Choice | Why (short) |
 |---|---|---|
-| **Primary store** | **PostgreSQL** (managed, e.g. RDS/Cloud SQL) | Records are well-structured and schema-versioned; we need transactions for the resolve+load step, rich indexing for freshness/date queries, `JSONB` for the flexible `content.data` blob, and mature ops. One store, no premature exotic infra. |
-| **Dedupe / rate-limit / queues** | **Redis** | O(1) set membership for the seen-store, shared token buckets, and light queues. Ephemeral, horizontally reachable. |
-| **Relationship graph** | **Neo4j** (or Postgres + `pg_roman`/edge tables until it hurts) | The product is an *Intelligence Graph*: startup ⇄ product ⇄ paper ⇄ author ⇄ job ⇄ news. Multi-hop traversals ("papers by people now hiring at OpenAI-competitors") are painful in SQL and native in a graph DB. Postgres stays the system of record; the graph is a projection rebuilt from it. |
-| **Vector store** | **pgvector** first, dedicated (Qdrant/Pinecone) at scale | Embeddings of paper abstracts / product descriptions / news power semantic dedupe and entity resolution beyond string similarity, and similarity search for the graph. pgvector keeps it in the primary DB until recall/latency at volume justifies a specialized service. |
-| **Raw HTML** | Object storage (S3/GCS), keyed by URL hash | Cheap, immutable audit trail so every record traces to exactly the bytes it came from (the anti-hallucination guarantee); lets us re-extract without re-crawling when schemas or models change. |
-| **Run outputs** | JSONL in object storage + Google Sheets projection | JSONL is the portable source of truth and the diff target between runs; Sheets is the human deliverable, rewritten per run. |
+| **Primary store** | **PostgreSQL** (managed) | Structured, schema-versioned records; transactions for resolve+load; `JSONB` for `content.data`; date/freshness indexing; mature ops. One store, no premature exotica. |
+| **Dedupe / limits / queues** | **Redis** | O(1) seen-set membership, shared token buckets, light queues. Ephemeral, horizontally reachable. |
+| **Relationship graph** | **Neo4j** (Postgres edge tables until it hurts) | It's an *Intelligence Graph* — startup ⇄ product ⇄ paper ⇄ author ⇄ job. Multi-hop queries are native there; Postgres stays system of record, the graph is a rebuilt projection. |
+| **Vector store** | **pgvector**, then Qdrant/Pinecone at scale | Embeddings drive semantic dedupe, entity resolution beyond string similarity, and graph similarity search. Stay in Postgres until recall/latency forces a split. |
+| **Raw HTML** | Object storage, keyed by URL hash | Immutable audit trail (every record traces to its bytes — the anti-hallucination guarantee); re-extract without re-crawling on schema/model change. |
+| **Run outputs** | JSONL + 6-tab `.xlsx` (Sheets API writer where SA keys are allowed) | JSONL = portable source of truth + diff target; workbook = human deliverable, rewritten per run. |
 
-**Data-integrity guarantee.** `source.url` is required and validated on every
-record; raw HTML is retained; the LLM is instructed to emit `null` rather than
-guess; validation failures on all tiers drop the record with a log line. No
-fabricated rows ever reach the store.
+**Data-integrity guarantee.** `source.url` required and validated on every
+record; raw HTML retained; LLM instructed to emit `null` not guess; validation
+failures on all tiers drop the record with a log line. No fabricated rows reach
+the store.
 
 ## 5. Anti-bot & scale thinking (Phase V summary)
 
 Cheap path first (`aiohttp`, rotating UA, per-host politeness). Escalate a
-domain to **headless Chromium (Playwright)** only on a challenge signal (403/503
-+ short body, Cloudflare/DataDome markers): realistic UA/viewport/locale/TZ,
-`navigator.webdriver` patched, human-ish pacing, one context per proxy
-identity, proxy rotation on challenge, exponential backoff, and **never solve
-CAPTCHAs** — park the domain and alert. Aggressive HTML caching minimises hits.
-At 500k scale this is a separate pool of browser workers fed the same
-`extract_queue`, so protected sources don't slow the main crawl.
+domain **only** on a challenge signal (403/503 + short body, Cloudflare /
+DataDome markers): ScraperAPI residential IPs → ScraperAPI server-side render →
+headless Chromium with realistic UA/viewport/locale/TZ, `navigator.webdriver`
+patched, human-ish pacing, one context per proxy identity, proxy rotation on
+challenge, exponential backoff — and **never solve CAPTCHAs**: park the domain
+and alert. Aggressive HTML caching minimises hits. At 500k scale this is a
+separate pool of render/proxy workers on the same `extract_queue`, so protected
+sources never slow the main crawl.
