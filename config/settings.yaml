@@ -32,14 +32,17 @@ llm:
     - provider: groq
       model: "openai/gpt-oss-120b"
       max_input_tokens: 120000
-    # Tier 2: Gemini Flash — huge 900k context for oversized docs; can 503 under
-    # load, so it sits behind Groq.
+    # Tier 2: OpenRouter auto-routed free pool — independent quota, JSON-reliable.
+    - provider: openrouter
+      model: "openrouter/free"
+      max_input_tokens: 60000
+    # Tier 3: Gemini Flash — huge 900k context for oversized docs; can 503 under load.
     - provider: gemini
       model: "gemini-flash-latest"
       max_input_tokens: 900000
-    # Tier 3: DeepSeek via OpenRouter — last-resort independent quota pool.
+    # Tier 4: OpenRouter GLM (free) — last-resort independent pool.
     - provider: openrouter
-      model: "deepseek/deepseek-chat"
+      model: "z-ai/glm-5.2:free"
       max_input_tokens: 60000
   # retry budget per tier before falling through to the next
   attempts_per_tier: 3

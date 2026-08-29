@@ -183,6 +183,49 @@ class LLMOrchestrator:
         raise ExtractionFailed("all LLM tiers exhausted", tried=tried)
 
     # --------------------------------------------------------------------- #
+    async def extract_many(
+        self,
+        *,
+        blocks: list[str],
+        item_target: type[T],
+        instructions: str,
+    ) -> list[T | None]:
+        """Structure a *list* of short source blocks in one LLM call.
+
+        The blocks are numbered and concatenated; the model returns a JSON
+        object `{"items": [ ... ]}` with one entry per block, in order. Cuts
+        N single-item calls down to one — the cost control the brief calls for,
+        and what makes a 1,000-row run finish on free-tier quota.
+
+        Returns a list the same length as `blocks`; an entry is `None` if the
+        model omitted it or produced an invalid item (caller falls back).
+        """
+        from pydantic import create_model
+
+        wrapper = create_model(  # type: ignore[call-overload]
+            f"{item_target.__name__}Batch",
+            items=(list[item_target], ...),
+        )
+        numbered = "\n\n".join(f"### ITEM {i + 1}\n{b}" for i, b in enumerate(blocks))
+        batch_instructions = (
+            f"{instructions}\n\nThe source contains {len(blocks)} items delimited by "
+            f"'### ITEM n'. Return {{\"items\": [...]}} with exactly {len(blocks)} objects "
+            f"in the same order; use one object per ITEM even if some fields are null."
+        )
+        try:
+            res = await self.extract(
+                raw_text=numbered, target=wrapper, instructions=batch_instructions,
+            )
+        except ExtractionFailed:
+            return [None] * len(blocks)
+
+        items = list(getattr(res.model, "items", []))
+        out: list[T | None] = []
+        for i in range(len(blocks)):
+            out.append(items[i] if i < len(items) else None)
+        return out
+
+    # --------------------------------------------------------------------- #
     async def _run_tier(
         self, provider, tier, plan, system, raw_text, target, context
     ) -> tuple[BaseModel, int, int]:

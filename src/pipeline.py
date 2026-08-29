@@ -145,22 +145,29 @@ def _company_from_text(*texts: str) -> str | None:
 async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityResolver) -> None:
     """Product Hunt GraphQL primary + TheresAnAIForThat (ScraperAPI) top-up.
 
-    Extraction is deterministic and quota-free: `startupName` defaults to the
-    product's own brand (a "by <Company>" / "part of <Company>" phrase in the
-    blurb upgrades it to the parent, resolver-canonicalised); `pricingModel`
-    comes from a keyword scan of the product's own website
-    (`crawler.pricing.classify_pricing`). Nothing is invented — every field
-    traces to the source text.
+    Two-pass extraction:
+      1. **Deterministic** — `startupName` = the product's brand (a
+         "by <Company>" phrase upgrades it to the parent); `pricingModel` from a
+         keyword scan of the product's own website. Quota-free, reproducible.
+      2. **Batched LLM enrichment** — ~15 products per call through the
+         multi-tier chain (`extract_many`) to recover a parent company / pricing
+         the keyword pass missed. One call per ~15 items keeps a 1,000-row run
+         inside free-tier quota. The LLM answer is used only if the company name
+         actually appears in the source; otherwise pass 1 stands.
+
+    Nothing is invented — every field traces to the source text.
     """
     from src.crawler.extract_text import extract_main_text
     from src.crawler.http import AsyncFetcher, FetchError
     from src.crawler.pricing import classify_pricing
     from src.crawler.producthunt import iter_producthunt
-    from src.schemas import ProductContent, ProductRecord
+    from src.schemas import PricingModel, ProductContent, ProductDraft, ProductRecord
 
     target = get_pipeline_config()["targets"]["products"]
-    records: list[ProductRecord] = []
-    sem = asyncio.Semaphore(12)
+    llm = LLMOrchestrator.from_config()
+    fetch_sem = asyncio.Semaphore(16)
+    batch_sem = asyncio.Semaphore(4)
+    BATCH = 15
 
     async def _site_text(fetcher: AsyncFetcher, url: str) -> str:
         if not url:
@@ -169,38 +176,79 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
             html = await fetcher.fetch_text(url)
         except FetchError:
             return ""
-        return extract_main_text(html)[:8000]
+        return extract_main_text(html)[:6000]
 
-    async def _shape(fetcher: AsyncFetcher, item: dict) -> None:
-        async with sem:
+    async def _prep(fetcher: AsyncFetcher, item: dict) -> dict:
+        async with fetch_sem:
             site = await _site_text(fetcher, item.get("website", ""))
-
         blurb = f"{item['name']} — {item.get('tagline', '')}\n{item.get('description', '')}"
         parent = _company_from_text(item.get("tagline", ""), item.get("description", ""))
-        startup_raw = parent if (parent and parent.lower() in blurb.lower()) else item["name"]
-        pricing = classify_pricing(blurb, site)
+        return {
+            "item": item,
+            "blurb": blurb,
+            "site": site,
+            "det_name": parent if (parent and parent.lower() in blurb.lower()) else item["name"],
+            "det_pricing": classify_pricing(blurb, site),
+        }
 
+    def _emit(prep: dict, name: str, pricing) -> ProductRecord | None:
         try:
-            records.append(ProductRecord(
-                source=Source(name="Product Hunt", url=item["url"]),
+            return ProductRecord(
+                source=Source(name="Product Hunt", url=prep["item"]["url"]),
                 content=ProductContent(
-                    startupName=resolver.resolve_str(startup_raw),
-                    pricingModel=pricing,
+                    startupName=resolver.resolve_str(name),
+                    pricingModel=pricing if isinstance(pricing, PricingModel) else None,
                 ),
-            ))
+            )
         except Exception as exc:  # noqa: BLE001
-            log.warning("product_record_invalid", url=item["url"], err=str(exc)[:140])
+            log.warning("product_record_invalid", url=prep["item"]["url"], err=str(exc)[:140])
+            return None
 
+    async def _enrich_batch(preps: list[dict]) -> list[ProductRecord]:
+        blocks = [
+            f"{p['blurb']}\n[website] {p['site'][:1200]}"
+            for p in preps
+        ]
+        async with batch_sem:
+            drafts = await llm.extract_many(
+                blocks=blocks, item_target=ProductDraft,
+                instructions=(
+                    "For each item: startupName = the company/brand that publishes the "
+                    "product (a name that literally appears in the text; else the product's "
+                    "own name — never invented). pricingModel = FREE, FREEMIUM, PAID or "
+                    "ENTERPRISE only when the text makes it clear, else null."
+                ),
+            )
+        out: list[ProductRecord] = []
+        for p, d in zip(preps, drafts, strict=False):
+            name, pricing = p["det_name"], p["det_pricing"]
+            if isinstance(d, ProductDraft):
+                cand = (d.startupName or "").strip()
+                src = f"{p['blurb']}\n{p['site']}".lower()
+                if cand and (cand.lower() in src or resolver.looks_known(cand)):
+                    name = cand
+                pricing = d.pricingModel or pricing
+            rec = _emit(p, name, pricing)
+            if rec:
+                out.append(rec)
+        return out
+
+    records: list[ProductRecord] = []
     async with AsyncFetcher() as fetcher:
-        batch: list[dict] = []
+        pending: list[dict] = []
+        items: list[dict] = []
         async for item in iter_producthunt(fetcher, max_records=target):
-            batch.append(item)
-            if len(batch) >= 60:
-                await asyncio.gather(*(_shape(fetcher, i) for i in batch))
-                batch.clear()
-                log.info("products_progress", done=len(records))
-        if batch:
-            await asyncio.gather(*(_shape(fetcher, i) for i in batch))
+            items.append(item)
+        log.info("products_fetched", count=len(items))
+
+        preps = await asyncio.gather(*(_prep(fetcher, it) for it in items))
+        for i in range(0, len(preps), BATCH):
+            pending.append(list(preps[i : i + BATCH]))
+
+        results = await asyncio.gather(*(_enrich_batch(b) for b in pending))
+        for r in results:
+            records.extend(r)
+        log.info("products_progress", done=len(records), batches=len(pending))
 
     # secondary top-up from TheresAnAIForThat if PH under target
     if len(records) < target:
