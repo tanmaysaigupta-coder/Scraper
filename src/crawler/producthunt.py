@@ -18,7 +18,9 @@ from the source text, not fabrication.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from src.config import get_settings
 from src.crawler.http import AsyncFetcher, FetchError
@@ -54,8 +56,12 @@ query($topic:String!, $after:String) {
 """
 
 
-async def _page(fetcher: AsyncFetcher, token: str, topic: str, after: str | None) -> dict:
-    for attempt in range(5):
+_CACHE = Path("data/cache/producthunt_items.jsonl")
+
+
+async def _page(fetcher: AsyncFetcher, token: str, topic: str, after: str | None) -> dict | None:
+    """One page, or None once PH's rate limit is clearly not recovering."""
+    for attempt in range(6):
         try:
             r = await fetcher.post_json(
                 _ENDPOINT,
@@ -64,19 +70,33 @@ async def _page(fetcher: AsyncFetcher, token: str, topic: str, after: str | None
             )
         except FetchError as exc:
             if exc.status == 429:
-                wait = 20 * (attempt + 1)
-                log.info("ph_rate_limited", topic=topic, sleep_s=wait)
+                wait = min(90, 15 * (attempt + 1))
+                log.info("ph_rate_limited", topic=topic, attempt=attempt, sleep_s=wait)
                 await asyncio.sleep(wait)
                 continue
             raise
         if "errors" in r:
-            msg = str(r["errors"])
-            if "rate" in msg.lower():
-                await asyncio.sleep(30)
+            if "rate" in str(r["errors"]).lower():
+                await asyncio.sleep(45)
                 continue
-            raise RuntimeError(f"Product Hunt GraphQL error: {msg[:200]}")
+            raise RuntimeError(f"Product Hunt GraphQL error: {str(r['errors'])[:200]}")
         return r["data"]["posts"]
-    raise RuntimeError(f"Product Hunt: exhausted retries for topic {topic}")
+    log.warning("ph_rate_limit_giveup", topic=topic)
+    return None  # let the caller stop gracefully with whatever it has
+
+
+def _read_cache() -> list[dict]:
+    if not _CACHE.exists():
+        return []
+    out = []
+    for line in _CACHE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return out
 
 
 async def iter_producthunt(
@@ -90,33 +110,57 @@ async def iter_producthunt(
     seen: set[str] = set()
     emitted = 0
 
-    for topic in AI_TOPICS:
-        after: str | None = None
-        while emitted < max_records:
-            data = await _page(fetcher, token, topic, after)
-            for edge in data["edges"]:
-                n = edge["node"]
-                if n["id"] in seen:
-                    continue
-                seen.add(n["id"])
-                topics = [t["node"]["name"] for t in n["topics"]["edges"]]
-                if topic == "artificial-intelligence" or "Artificial Intelligence" in topics:
-                    yield {
-                        "id": n["id"],
-                        "name": n["name"].strip(),
-                        "tagline": n["tagline"],
-                        "description": n["description"] or "",
-                        "url": n["url"].split("?")[0],
-                        "website": n.get("website", ""),
-                        "topics": topics,
-                        "makers": [m["name"] for m in n.get("makers", [])],
-                        "votes": n.get("votesCount"),
-                        "created_at": n.get("createdAt"),
-                    }
-                    emitted += 1
-                    if emitted >= max_records:
-                        return
-            if not data["pageInfo"]["hasNextPage"]:
-                break
-            after = data["pageInfo"]["endCursor"]
-            await asyncio.sleep(1.5)  # stay well under the complexity budget
+    # 1) serve from the disk cache first — makes re-runs free and survives a
+    #    rate-limit wall on PH's API
+    for it in _read_cache():
+        if it["id"] in seen:
+            continue
+        seen.add(it["id"])
+        yield it
+        emitted += 1
+        if emitted >= max_records:
+            return
+    if seen:
+        log.info("ph_cache_served", count=len(seen))
+
+    # 2) top up from the API, appending anything new to the cache
+    _CACHE.parent.mkdir(parents=True, exist_ok=True)
+    cache_fh = _CACHE.open("a", encoding="utf-8")
+    try:
+        for topic in AI_TOPICS:
+            after: str | None = None
+            while emitted < max_records:
+                data = await _page(fetcher, token, topic, after)
+                if data is None:  # PH rate limit not recovering — stop cleanly
+                    return
+                for edge in data["edges"]:
+                    n = edge["node"]
+                    if n["id"] in seen:
+                        continue
+                    seen.add(n["id"])
+                    topics = [t["node"]["name"] for t in n["topics"]["edges"]]
+                    if topic == "artificial-intelligence" or "Artificial Intelligence" in topics:
+                        rec = {
+                            "id": n["id"],
+                            "name": n["name"].strip(),
+                            "tagline": n["tagline"],
+                            "description": n["description"] or "",
+                            "url": n["url"].split("?")[0],
+                            "website": n.get("website", ""),
+                            "topics": topics,
+                            "makers": [m["name"] for m in n.get("makers", [])],
+                            "votes": n.get("votesCount"),
+                            "created_at": n.get("createdAt"),
+                        }
+                        cache_fh.write(json.dumps(rec) + "\n")
+                        cache_fh.flush()
+                        yield rec
+                        emitted += 1
+                        if emitted >= max_records:
+                            return
+                if not data["pageInfo"]["hasNextPage"]:
+                    break
+                after = data["pageInfo"]["endCursor"]
+                await asyncio.sleep(4.0)  # gentle — stay well under PH's complexity budget
+    finally:
+        cache_fh.close()
