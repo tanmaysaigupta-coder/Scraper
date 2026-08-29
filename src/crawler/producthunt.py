@@ -99,6 +99,12 @@ def _read_cache() -> list[dict]:
     return out
 
 
+def _append_cache(rec: dict) -> None:
+    _CACHE.parent.mkdir(parents=True, exist_ok=True)
+    with _CACHE.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
 async def iter_producthunt(
     fetcher: AsyncFetcher, *, max_records: int = 1000
 ) -> AsyncIterator[dict]:
@@ -124,43 +130,37 @@ async def iter_producthunt(
         log.info("ph_cache_served", count=len(seen))
 
     # 2) top up from the API, appending anything new to the cache
-    _CACHE.parent.mkdir(parents=True, exist_ok=True)
-    cache_fh = _CACHE.open("a", encoding="utf-8")
-    try:
-        for topic in AI_TOPICS:
-            after: str | None = None
-            while emitted < max_records:
-                data = await _page(fetcher, token, topic, after)
-                if data is None:  # PH rate limit not recovering — stop cleanly
-                    return
-                for edge in data["edges"]:
-                    n = edge["node"]
-                    if n["id"] in seen:
-                        continue
-                    seen.add(n["id"])
-                    topics = [t["node"]["name"] for t in n["topics"]["edges"]]
-                    if topic == "artificial-intelligence" or "Artificial Intelligence" in topics:
-                        rec = {
-                            "id": n["id"],
-                            "name": n["name"].strip(),
-                            "tagline": n["tagline"],
-                            "description": n["description"] or "",
-                            "url": n["url"].split("?")[0],
-                            "website": n.get("website", ""),
-                            "topics": topics,
-                            "makers": [m["name"] for m in n.get("makers", [])],
-                            "votes": n.get("votesCount"),
-                            "created_at": n.get("createdAt"),
-                        }
-                        cache_fh.write(json.dumps(rec) + "\n")
-                        cache_fh.flush()
-                        yield rec
-                        emitted += 1
-                        if emitted >= max_records:
-                            return
-                if not data["pageInfo"]["hasNextPage"]:
-                    break
-                after = data["pageInfo"]["endCursor"]
-                await asyncio.sleep(4.0)  # gentle — stay well under PH's complexity budget
-    finally:
-        cache_fh.close()
+    for topic in AI_TOPICS:
+        after: str | None = None
+        while emitted < max_records:
+            data = await _page(fetcher, token, topic, after)
+            if data is None:  # PH rate limit not recovering — stop cleanly
+                return
+            for edge in data["edges"]:
+                n = edge["node"]
+                if n["id"] in seen:
+                    continue
+                seen.add(n["id"])
+                topics = [t["node"]["name"] for t in n["topics"]["edges"]]
+                if topic == "artificial-intelligence" or "Artificial Intelligence" in topics:
+                    rec = {
+                        "id": n["id"],
+                        "name": n["name"].strip(),
+                        "tagline": n["tagline"],
+                        "description": n["description"] or "",
+                        "url": n["url"].split("?")[0],
+                        "website": n.get("website", ""),
+                        "topics": topics,
+                        "makers": [m["name"] for m in n.get("makers", [])],
+                        "votes": n.get("votesCount"),
+                        "created_at": n.get("createdAt"),
+                    }
+                    _append_cache(rec)
+                    yield rec
+                    emitted += 1
+                    if emitted >= max_records:
+                        return
+            if not data["pageInfo"]["hasNextPage"]:
+                break
+            after = data["pageInfo"]["endCursor"]
+            await asyncio.sleep(4.0)  # gentle — stay well under PH's complexity budget
