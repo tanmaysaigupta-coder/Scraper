@@ -141,8 +141,11 @@ async def crawl_feed_vertical(vertical: str, *, seen: SeenStore | None = None) -
 
 
 async def _fetch_fulltext(fetcher: AsyncFetcher, url: str) -> str:
-    from src.crawler.browser import looks_like_challenge
+    from src.crawler.browser import looks_like_challenge, render
+    from src.crawler.scraperapi import ScraperAPIError, scraper_get
+    from src.crawler.scraperapi import available as scraperapi_available
 
+    html = ""
     try:
         html = await fetcher.fetch_text(url)
         if not looks_like_challenge(html, 200):
@@ -152,14 +155,18 @@ async def _fetch_fulltext(fetcher: AsyncFetcher, url: str) -> str:
     except FetchError as exc:
         if exc.status not in (403, 429, 503):
             return ""
-        html = ""
 
-    # anti-bot edge or thin render -> escalate to a real browser (Phase V)
+    # anti-bot edge / thin render -> ScraperAPI (Phase V), then Playwright
+    if scraperapi_available():
+        try:
+            text = extract_main_text(await scraper_get(url, render=False))
+            if len(text) > 200:
+                return text
+        except ScraperAPIError as exc:
+            log.info("fulltext_scraperapi_failed", url=url, err=str(exc)[:140])
+
     try:
-        from src.crawler.browser import render
-
-        rendered = await render(url)
-        return extract_main_text(rendered)
-    except Exception as exc:  # noqa: BLE001 - playwright may be uninstalled at trial time
+        return extract_main_text(await render(url))
+    except Exception as exc:  # noqa: BLE001 - BrowserUnavailable in sandboxes, or launch errors
         log.info("fulltext_browser_failed", url=url, err=str(exc)[:140])
         return extract_main_text(html) if html else ""
