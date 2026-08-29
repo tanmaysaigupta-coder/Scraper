@@ -11,6 +11,7 @@ One vertical:        python -m src.pipeline papers
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 
 from src.config import get_pipeline_config, get_sources_config
@@ -121,20 +122,45 @@ async def run_startups(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
     log.info("startups_done", count=len(records))
 
 
+_COMPANY_FROM_TEXT = re.compile(
+    r"\b(?:by|from|made by|built by|powered by|a product of|part of)\s+"
+    r"([A-Z][A-Za-z0-9][A-Za-z0-9.&' ]{1,28}?)"
+    r"(?=[.,;:)\n]| — | - |\s+(?:is|was|helps|makes|offers|provides|lets|the)\b|$)"
+)
+
+
+def _company_from_text(*texts: str) -> str | None:
+    for t in texts:
+        for m in _COMPANY_FROM_TEXT.finditer(t or ""):
+            cand = m.group(1).strip().rstrip(".")
+            low = cand.lower()
+            if 2 <= len(cand) <= 30 and low not in {
+                "the", "our team", "us", "me", "a team", "two", "a group",
+                "a solo", "an indie", "the makers", "the team",
+            }:
+                return cand
+    return None
+
+
 async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityResolver) -> None:
-    """Primary: Product Hunt GraphQL (startupName + pricingModel via LLM).
-    Secondary top-up: the TheresAnAIForThat directory crawler (needs the
-    ScraperAPI / browser path for its Cloudflare-gated listing pages).
+    """Product Hunt GraphQL primary + TheresAnAIForThat (ScraperAPI) top-up.
+
+    Extraction is deterministic and quota-free: `startupName` defaults to the
+    product's own brand (a "by <Company>" / "part of <Company>" phrase in the
+    blurb upgrades it to the parent, resolver-canonicalised); `pricingModel`
+    comes from a keyword scan of the product's own website
+    (`crawler.pricing.classify_pricing`). Nothing is invented — every field
+    traces to the source text.
     """
     from src.crawler.extract_text import extract_main_text
     from src.crawler.http import AsyncFetcher, FetchError
+    from src.crawler.pricing import classify_pricing
     from src.crawler.producthunt import iter_producthunt
-    from src.schemas import PricingModel, ProductContent, ProductDraft, ProductRecord
+    from src.schemas import ProductContent, ProductRecord
 
     target = get_pipeline_config()["targets"]["products"]
-    llm = LLMOrchestrator.from_config()
     records: list[ProductRecord] = []
-    sem = asyncio.Semaphore(6)
+    sem = asyncio.Semaphore(12)
 
     async def _site_text(fetcher: AsyncFetcher, url: str) -> str:
         if not url:
@@ -143,47 +169,23 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
             html = await fetcher.fetch_text(url)
         except FetchError:
             return ""
-        return extract_main_text(html)[:6000]
+        return extract_main_text(html)[:8000]
 
     async def _shape(fetcher: AsyncFetcher, item: dict) -> None:
-        site = await _site_text(fetcher, item.get("website", ""))
-        source_text = (
-            f"{item['name']} — {item['tagline']}\n\n{item['description']}\n\n"
-            f"[product website extract]\n{site}"
-        ).strip()
+        async with sem:
+            site = await _site_text(fetcher, item.get("website", ""))
 
-        startup_raw, pricing = item["name"], None
-        try:
-            async with sem:
-                res = await llm.extract(
-                    raw_text=source_text, target=ProductDraft,
-                    instructions=(
-                        "startupName = the name of the company/brand that publishes this "
-                        "product. Only use a company name that literally appears in the text; "
-                        "if the publisher is an individual or no distinct company is named, "
-                        "return the product's own name. Never invent a company. "
-                        "pricingModel = one of FREE, FREEMIUM, PAID, ENTERPRISE only when the "
-                        "text clearly indicates it (e.g. a 'Free plan' + paid tiers => FREEMIUM, "
-                        "'Contact sales' / 'custom pricing' => ENTERPRISE), else null."
-                    ),
-                    context={"makers": item.get("makers"), "source_url": item["url"]},
-                )
-            pc: ProductDraft = res.model  # type: ignore[assignment]
-            cand = (pc.startupName or "").strip()
-            # guard against hallucinated companies: keep only if it shows up in the source
-            if cand and (cand.lower() in source_text.lower()
-                         or resolver.looks_known(cand)):
-                startup_raw = cand
-            pricing = pc.pricingModel
-        except ExtractionFailed as exc:
-            log.warning("product_extract_failed", url=item["url"], tried=exc.tried)
+        blurb = f"{item['name']} — {item.get('tagline', '')}\n{item.get('description', '')}"
+        parent = _company_from_text(item.get("tagline", ""), item.get("description", ""))
+        startup_raw = parent if (parent and parent.lower() in blurb.lower()) else item["name"]
+        pricing = classify_pricing(blurb, site)
 
         try:
             records.append(ProductRecord(
                 source=Source(name="Product Hunt", url=item["url"]),
                 content=ProductContent(
                     startupName=resolver.resolve_str(startup_raw),
-                    pricingModel=pricing if isinstance(pricing, PricingModel) else None,
+                    pricingModel=pricing,
                 ),
             ))
         except Exception as exc:  # noqa: BLE001
@@ -193,9 +195,10 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
         batch: list[dict] = []
         async for item in iter_producthunt(fetcher, max_records=target):
             batch.append(item)
-            if len(batch) >= 40:
+            if len(batch) >= 60:
                 await asyncio.gather(*(_shape(fetcher, i) for i in batch))
                 batch.clear()
+                log.info("products_progress", done=len(records))
         if batch:
             await asyncio.gather(*(_shape(fetcher, i) for i in batch))
 
