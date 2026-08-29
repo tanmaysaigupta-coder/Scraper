@@ -86,6 +86,16 @@ class EntityResolver:
         self._canon_by_norm[n] = canonical
         self._canon_by_despace[_despace(n)] = canonical
 
+    def looks_known(self, raw: str) -> bool:
+        """True if `raw` maps to an existing canonical (no new entity would be minted)."""
+        if not raw or not raw.strip():
+            return False
+        n = normalize(raw)
+        if n in self._canon_by_norm or n in self._aliases or _despace(n) in self._canon_by_despace:
+            return True
+        match = process.extractOne(n, self._canon_by_norm.keys(), scorer=fuzz.token_set_ratio)
+        return bool(match and match[1] >= self.threshold)
+
     def register_alias(self, alias: str, canonical: str) -> None:
         """Add a runtime alias (e.g. a startup's former name from the source)."""
         if not alias or not alias.strip() or not canonical:

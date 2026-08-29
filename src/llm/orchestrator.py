@@ -82,6 +82,7 @@ class LLMOrchestrator:
     backoff_base_s: float = 2.0
     backoff_max_s: float = 45.0
     _plan: ChunkPlan | None = None
+    cache: object | None = None  # ExtractionCache | None
 
     @classmethod
     def from_config(cls) -> LLMOrchestrator:
@@ -102,6 +103,7 @@ class LLMOrchestrator:
             backoff_base_s=float(cfg.get("backoff_base_s", 2.0)),
             backoff_max_s=float(cfg.get("backoff_max_s", 45.0)),
             _plan=plan,
+            cache=_default_cache(),
         )
 
     # --------------------------------------------------------------------- #
@@ -140,6 +142,15 @@ class LLMOrchestrator:
             f"JSON Schema:\n{schema_json}\n\n{instructions}"
         )
 
+        if self.cache is not None:
+            hit = self.cache.get(target.__name__, instructions, raw_text)
+            if hit is not None:
+                return ExtractionResult(
+                    model=target.model_validate(hit), provider="cache", tier_model="cache",
+                    attempts=0, chunks=0, elapsed_s=round(time.monotonic() - started, 3),
+                    fell_back=False,
+                )
+
         for idx, tier in enumerate(self._tiers):
             provider = self._provider(tier.provider)
             if provider is None:
@@ -154,6 +165,10 @@ class LLMOrchestrator:
             except _TierExhausted as exc:
                 log.warning("tier_exhausted", provider=tier.provider, model=tier.model, cause=str(exc))
                 continue
+
+            if self.cache is not None:
+                self.cache.put(target.__name__, instructions, raw_text,
+                               model_obj.model_dump(mode="json"), tier.provider)
 
             return ExtractionResult(
                 model=model_obj,
@@ -202,11 +217,30 @@ class LLMOrchestrator:
             except (ContentError, ValidationError, json.JSONDecodeError) as exc:
                 log.info("bad_content", provider=tier.provider, attempt=attempt, detail=str(exc)[:200])
 
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as exc:  # noqa: BLE001 - never let one odd error kill the whole chain
+                wait = self._sleep_for(attempt, None)
+                log.warning("tier_unexpected_error", provider=tier.provider, attempt=attempt,
+                            err=f"{type(exc).__name__}: {str(exc)[:160]}", sleep_s=round(wait, 2))
+                await asyncio.sleep(wait)
+
         raise _TierExhausted(f"{tier.provider} gave no valid result in {self.attempts_per_tier} attempts")
 
 
 class _TierExhausted(LLMError):
     pass
+
+
+def _default_cache():
+    try:
+        from src.llm.cache import ExtractionCache
+
+        return ExtractionCache()
+    except Exception as exc:  # noqa: BLE001 - cache is an optimization, never fatal
+        log.warning("extraction_cache_unavailable", err=str(exc)[:160])
+        return None
 
 
 def _render_user(payload: str, context: dict) -> str:

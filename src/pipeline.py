@@ -99,10 +99,90 @@ async def run_startups(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
 
 
 async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityResolver) -> None:
+    """Primary: Product Hunt GraphQL (startupName + pricingModel via LLM).
+    Secondary top-up: the TheresAnAIForThat directory crawler (needs the
+    ScraperAPI / browser path for its Cloudflare-gated listing pages).
+    """
+    from src.crawler.extract_text import extract_main_text
+    from src.crawler.http import AsyncFetcher, FetchError
+    from src.crawler.producthunt import iter_producthunt
+    from src.schemas import PricingModel, ProductContent, ProductRecord
+
     target = get_pipeline_config()["targets"]["products"]
-    records = []
-    async for rec in crawl_directory("products", max_records=target, resolver=resolver):
-        records.append(rec)
+    llm = LLMOrchestrator.from_config()
+    records: list[ProductRecord] = []
+    sem = asyncio.Semaphore(6)
+
+    async def _site_text(fetcher: AsyncFetcher, url: str) -> str:
+        if not url:
+            return ""
+        try:
+            html = await fetcher.fetch_text(url)
+        except FetchError:
+            return ""
+        return extract_main_text(html)[:6000]
+
+    async def _shape(fetcher: AsyncFetcher, item: dict) -> None:
+        site = await _site_text(fetcher, item.get("website", ""))
+        source_text = (
+            f"{item['name']} — {item['tagline']}\n\n{item['description']}\n\n"
+            f"[product website extract]\n{site}"
+        ).strip()
+
+        startup_raw, pricing = item["name"], None
+        try:
+            async with sem:
+                res = await llm.extract(
+                    raw_text=source_text, target=ProductContent,
+                    instructions=(
+                        "startupName = the name of the company/brand that publishes this "
+                        "product. Only use a company name that literally appears in the text; "
+                        "if the publisher is an individual or no distinct company is named, "
+                        "return the product's own name. Never invent a company. "
+                        "pricingModel = one of FREE, FREEMIUM, PAID, ENTERPRISE only when the "
+                        "text clearly indicates it (e.g. a 'Free plan' + paid tiers => FREEMIUM, "
+                        "'Contact sales' / 'custom pricing' => ENTERPRISE), else null."
+                    ),
+                    context={"makers": item.get("makers"), "source_url": item["url"]},
+                )
+            pc: ProductContent = res.model  # type: ignore[assignment]
+            cand = (pc.startupName or "").strip()
+            # guard against hallucinated companies: keep only if it shows up in the source
+            if cand and (cand.lower() in source_text.lower()
+                         or resolver.looks_known(cand)):
+                startup_raw = cand
+            pricing = pc.pricingModel
+        except ExtractionFailed as exc:
+            log.warning("product_extract_failed", url=item["url"], tried=exc.tried)
+
+        try:
+            records.append(ProductRecord(
+                source=Source(name="Product Hunt", url=item["url"]),
+                content=ProductContent(
+                    startupName=resolver.resolve_str(startup_raw),
+                    pricingModel=pricing if isinstance(pricing, PricingModel) else None,
+                ),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("product_record_invalid", url=item["url"], err=str(exc)[:140])
+
+    async with AsyncFetcher() as fetcher:
+        batch: list[dict] = []
+        async for item in iter_producthunt(fetcher, max_records=target):
+            batch.append(item)
+            if len(batch) >= 40:
+                await asyncio.gather(*(_shape(fetcher, i) for i in batch))
+                batch.clear()
+        if batch:
+            await asyncio.gather(*(_shape(fetcher, i) for i in batch))
+
+    # secondary top-up from TheresAnAIForThat if PH under target
+    if len(records) < target:
+        remaining = target - len(records)
+        log.info("products_topup_taaft", remaining=remaining)
+        async for rec in crawl_directory("products", max_records=remaining, resolver=resolver):
+            records.append(rec)
+
     jsonl.write("PRODUCT", records)
     sheets.write_records("products", records, PRODUCT_COLUMNS)
     log.info("products_done", count=len(records))

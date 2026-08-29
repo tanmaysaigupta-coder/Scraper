@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # GitHub
     github_token: str | None = None
 
+    # Product Hunt (products vertical)
+    producthunt_token: str | None = None
+
     # Google Sheets sink
     google_service_account_json: str = "./config/gcp-service-account.json"
     gsheet_id: str | None = None

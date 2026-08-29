@@ -66,6 +66,7 @@ class GeminiProvider(Provider):
         # Direct REST call. The google-generativeai SDK defaults to a gRPC
         # transport that is minutes-per-call slow on some networks; REST is
         # 10-30x faster and genuinely async here (no thread pool).
+
         import aiohttp
 
         payload = {
@@ -94,8 +95,8 @@ class GeminiProvider(Provider):
                         raise ProviderError(f"HTTP {resp.status}: {body[:200]}",
                                             provider=self.name, status=resp.status)
                     data = __import__("json").loads(body)
-        except aiohttp.ClientError as exc:
-            raise ProviderError(str(exc), provider=self.name) from exc
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise ProviderError(f"{type(exc).__name__}: {exc}", provider=self.name) from exc
 
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"]
