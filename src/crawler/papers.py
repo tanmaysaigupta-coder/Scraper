@@ -114,14 +114,23 @@ async def _discover_github(fetcher: AsyncFetcher, paper: dict) -> str | None:
 
 
 async def crawl_research_papers(
-    *, max_records: int = 1000
+    *, max_records: int = 1000, require_github: bool = True, scan_cap: int = 8000
 ) -> AsyncIterator[ResearchPaperRecord]:
+    """Yield `max_records` papers.
+
+    With `require_github=True` (the brief wants "papers WITH GitHub metrics"),
+    only papers that resolved to a repo with a live star count are counted
+    toward the target; arXiv is scanned newest-first up to `scan_cap` papers to
+    fill the quota. `scan_cap` bounds the work if the hit-rate is low.
+    """
     from src.config import get_sources_config
 
     src_cfg = next(
         s for s in get_sources_config()["research_papers"] if s["name"] == "arXiv"
     )
 
+    emitted = 0
+    scanned = 0
     async with AsyncFetcher() as fetcher:
         stars = GitHubStars(fetcher)
         buffer: list[dict] = []
@@ -131,16 +140,29 @@ async def crawl_research_papers(
             base_url=src_cfg["base_url"],
             categories=src_cfg["categories"],
             page_size=src_cfg.get("page_size", 200),
-            max_records=max_records,
+            max_records=scan_cap if require_github else max_records,
         ):
             buffer.append(paper)
+            scanned += 1
             if len(buffer) >= 50:
                 async for rec in _flush(fetcher, stars, buffer):
+                    if require_github and rec.content.github_stars is None:
+                        continue
                     yield rec
+                    emitted += 1
+                    if emitted >= max_records:
+                        return
                 buffer.clear()
 
         async for rec in _flush(fetcher, stars, buffer):
+            if require_github and rec.content.github_stars is None:
+                continue
             yield rec
+            emitted += 1
+            if emitted >= max_records:
+                return
+
+    log.info("papers_scan_done", emitted=emitted, scanned=scanned, require_github=require_github)
 
 
 async def _flush(fetcher, stars: GitHubStars, papers: list[dict]) -> AsyncIterator[ResearchPaperRecord]:
