@@ -158,7 +158,7 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
     Nothing is invented — every field traces to the source text.
     """
     from src.crawler.extract_text import extract_main_text
-    from src.crawler.http import AsyncFetcher, FetchError
+    from src.crawler.http import AsyncFetcher
     from src.crawler.pricing import classify_pricing
     from src.crawler.producthunt import iter_producthunt
     from src.schemas import PricingModel, ProductContent, ProductDraft, ProductRecord
@@ -174,13 +174,16 @@ async def run_products(jsonl: JsonlSink, sheets: SheetsSink, resolver: EntityRes
             return ""
         try:
             html = await fetcher.fetch_text(url)
-        except FetchError:
+            return extract_main_text(html)[:6000]
+        except Exception:  # noqa: BLE001 - a single bad site must not stop the run
             return ""
-        return extract_main_text(html)[:6000]
 
     async def _prep(fetcher: AsyncFetcher, item: dict) -> dict:
-        async with fetch_sem:
-            site = await _site_text(fetcher, item.get("website", ""))
+        try:
+            async with fetch_sem:
+                site = await _site_text(fetcher, item.get("website", ""))
+        except Exception:  # noqa: BLE001
+            site = ""
         blurb = f"{item['name']} — {item.get('tagline', '')}\n{item.get('description', '')}"
         parent = _company_from_text(item.get("tagline", ""), item.get("description", ""))
         return {

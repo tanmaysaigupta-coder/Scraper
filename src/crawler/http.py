@@ -125,7 +125,13 @@ class AsyncFetcher:
                         method, url, headers=merged, params=params, data=data,
                         proxy=self._proxy, allow_redirects=True,
                     ) as resp:
-                        text = await resp.text()
+                        # decode defensively — many pages mislabel or use latin-1;
+                        # a bad byte must never crash the crawl
+                        raw = await resp.read()
+                        try:
+                            text = raw.decode(resp.get_encoding() or "utf-8", errors="replace")
+                        except (LookupError, RuntimeError):
+                            text = raw.decode("utf-8", errors="replace")
                         if resp.status in _RETRY_STATUS:
                             ra = resp.headers.get("Retry-After")
                             wait = self._sleep_for(attempt, float(ra) if ra and ra.isdigit() else None)
